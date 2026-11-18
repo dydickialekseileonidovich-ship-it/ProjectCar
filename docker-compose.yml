@@ -3,3 +3,5 @@ services:
     build: .
     image: fleet-management:latest
     container_name: fleet-management
+    ports:
+      - "8080:8080"

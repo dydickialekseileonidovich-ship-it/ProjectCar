@@ -20,6 +20,12 @@
     </properties>
 
     <dependencies>
+        <!-- Spring Web (Встроенный веб-сервер Tomcat на http://localhost:8080 и REST API) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
         <!-- Spring Data JPA (Hibernate ORM) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
