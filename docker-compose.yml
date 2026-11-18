@@ -1,0 +1,5 @@
+services:
+  fleet-app:
+    build: .
+    image: fleet-management:latest
+    container_name: fleet-management
