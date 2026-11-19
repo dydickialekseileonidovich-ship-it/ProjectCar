@@ -188,16 +188,16 @@
             <button onclick="finishTrip()">Завершить рейс</button>
         </div>
 
-        <!-- 3. Провести ТО -->
+        <!-- 3. Провести ТО или заправку в пути -->
         <div class="card">
-            <h2>3. Техническое обслуживание (ТО)</h2>
+            <h2>3. ТО на базе / Заправка в рейсе</h2>
             <label>Автомобиль</label>
             <select id="maintVehicle"></select>
             <label>Описание работ</label>
-            <input type="text" id="maintDesc" value="Мойка, заправка и осмотр">
-            <label>Дата и время ТО (только ПН–ПТ 08:00–17:00)</label>
+            <input type="text" id="maintDesc" value="Дозаправка / Мойка и осмотр">
+            <label>Дата и время (ТО на базе: ПН–ПТ 08:00–17:00; Заправка в рейсе: 24/7)</label>
             <input type="datetime-local" id="maintTime" value="2026-11-17T16:00">
-            <button onclick="performMaintenance()">Провести обслуживание</button>
+            <button onclick="performMaintenance()">Внести в список работ</button>
         </div>
     </div>
 

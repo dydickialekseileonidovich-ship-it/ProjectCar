@@ -12,7 +12,7 @@ import java.util.stream.Collectors;
 
 /**
  * Основной сервис бизнес-логики управления автопарком.
- * Отвечает за проверку правил выдачи автомобилей, завершения рейсов, проведения ТО и построения отчетов.
+ * Отвечает за проверку правил выдачи автомобилей, завершения рейсов, заправки в пути, проведения ТО и построения отчетов.
  */
 @Service
 public class FleetService {
@@ -37,33 +37,30 @@ public class FleetService {
      */
     @Transactional
     public Trip startTrip(Long driverId, Long vehicleId, LocalDateTime startTime) {
-        // 1. Ищем водителя и автомобиль в БД по их ID
         Driver driver = driverRepo.findById(driverId)
                 .orElseThrow(() -> new IllegalArgumentException("Водитель не найден"));
         Vehicle vehicle = vehicleRepo.findById(vehicleId)
                 .orElseThrow(() -> new IllegalArgumentException("Автомобиль не найден"));
 
-        // 2. ПРОВЕРКА ПРАВИЛА №1: Один водитель не может управлять несколькими авто одновременно
+        // ПРОВЕРКА ПРАВИЛА №1: Один водитель не может управлять несколькими авто одновременно
         if (driver.isBusy()) {
             throw new IllegalStateException("Водитель уже находится в другом рейсе!");
         }
-        // 3. ПРОВЕРКА ПРАВИЛА №2: У водителя должна быть открыта категория прав для данного вида ТС
+        // ПРОВЕРКА ПРАВИЛА №2: У водителя должна быть открыта категория прав для данного вида ТС
         if (!driver.getCategories().contains(vehicle.getCategory())) {
             throw new IllegalStateException("У водителя нет нужной категории прав: " + vehicle.getCategory());
         }
-        // 4. ПРОВЕРКА ПРАВИЛА №3: Автомобиль должен быть свободен и обслужен (статус AVAILABLE)
+        // ПРОВЕРКА ПРАВИЛА №3: Автомобиль должен быть свободен и обслужен (статус AVAILABLE)
         if (vehicle.getStatus() != VehicleStatus.AVAILABLE) {
             throw new IllegalStateException("Автомобиль недоступен (в рейсе или требует обслуживания)!");
         }
 
-        // 5. Меняем состояния: водитель занят, машина в рейсе (IN_USE)
         driver.setBusy(true);
         vehicle.setStatus(VehicleStatus.IN_USE);
 
         driverRepo.save(driver);
         vehicleRepo.save(vehicle);
 
-        // 6. Создаем и сохраняем запись о начатом рейсе в БД
         return tripRepo.save(new Trip(driver, vehicle, startTime));
     }
 
@@ -75,19 +72,16 @@ public class FleetService {
         Trip trip = tripRepo.findById(tripId)
                 .orElseThrow(() -> new IllegalArgumentException("Рейс не найден"));
 
-        // Проверка корректности времени окончания поездки
         if (endTime.isBefore(trip.getStartTime())) {
             throw new IllegalArgumentException("Время окончания не может быть раньше времени начала рейса");
         }
 
         trip.setEndTime(endTime);
 
-        // Водитель освобождается и может брать другой свободный автомобиль
         Driver driver = trip.getDriver();
         driver.setBusy(false);
 
-        // ВАЖНОЕ ПРАВИЛО: После любого рейса автомобиль переходит в статус NEEDS_MAINTENANCE (требует ТО).
-        // До прохождения обслуживания он не сможет снова выехать в рейс.
+        // После возврата из рейса автомобиль переходит в статус NEEDS_MAINTENANCE (требует послерейсового ТО в парке)
         Vehicle vehicle = trip.getVehicle();
         vehicle.setStatus(VehicleStatus.NEEDS_MAINTENANCE);
 
@@ -97,41 +91,46 @@ public class FleetService {
     }
 
     /**
-     * Проведение обязательного технического обслуживания (мойка, заправка, осмотр) после рейса.
+     * Внесение записи в список работ / ТО:
+     * 1) Если авто находится В РЕЙСЕ (IN_USE) — разрешена дозаправка или путевые работы в дороге (24/7),
+     *    при этом статус авто остается IN_USE (рейс продолжается).
+     * 2) Если авто вернулось из рейса (NEEDS_MAINTENANCE) — проводится послерейсовое ТО в автопарке
+     *    (только в будние дни ПН–ПТ с 08:00 до 17:00), после чего авто переходит в статус AVAILABLE.
      */
     @Transactional
     public MaintenanceRecord performMaintenance(Long vehicleId, String description, LocalDateTime time) {
-        DayOfWeek day = time.getDayOfWeek();
-        int hour = time.getHour();
-
-        // ВАЖНОЕ ПРАВИЛО: Служба ТО работает ТОЛЬКО в будние дни (ПН–ПТ) с 08:00 до 17:00
-        if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY || hour < 8 || hour >= 17) {
-            throw new IllegalStateException("Обслуживание проводится только в будние дни с 08:00 до 17:00!");
-        }
-
         Vehicle vehicle = vehicleRepo.findById(vehicleId)
                 .orElseThrow(() -> new IllegalArgumentException("Автомобиль не найден"));
 
-        // Обслуживать можно только машину, которая вернулась из рейса и ждет ТО
-        if (vehicle.getStatus() != VehicleStatus.NEEDS_MAINTENANCE) {
-            throw new IllegalStateException("Автомобиль не нуждается в обслуживании или находится в рейсе.");
+        // Сценарий 1: Дозаправка или экстренные работы в дороге, пока машина в активном рейсе (IN_USE)
+        if (vehicle.getStatus() == VehicleStatus.IN_USE) {
+            return maintenanceRepo.save(new MaintenanceRecord(vehicle, time, "[В рейсе] " + description));
         }
 
-        // После ТО автомобиль снова становится доступным для новых поездок (AVAILABLE)
+        // Сценарий 2: Обязательное послерейсовое ТО на базе автопарка (работает в будни с 08:00 до 17:00)
+        DayOfWeek day = time.getDayOfWeek();
+        int hour = time.getHour();
+
+        if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY || hour < 8 || hour >= 17) {
+            throw new IllegalStateException("Обслуживание на базе проводится только в будние дни с 08:00 до 17:00!");
+        }
+
+        if (vehicle.getStatus() != VehicleStatus.NEEDS_MAINTENANCE) {
+            throw new IllegalStateException("Автомобиль уже обслужен и свободен.");
+        }
+
         vehicle.setStatus(VehicleStatus.AVAILABLE);
         vehicleRepo.save(vehicle);
 
-        // Сохраняем запись в журнал ТО
         return maintenanceRepo.save(new MaintenanceRecord(vehicle, time, description));
     }
 
     /**
      * Отчет №1: Суммарное отработанное время по каждому водителю (в часах).
-     * Использует Stream API для группировки завершенных рейсов по ФИО водителя.
      */
     public Map<String, Long> getDriverWorkHoursReport() {
         return tripRepo.findAll().stream()
-                .filter(t -> t.getEndTime() != null) // Учитываем только завершенные рейсы
+                .filter(t -> t.getEndTime() != null)
                 .collect(Collectors.groupingBy(
                         t -> t.getDriver().getFullName(),
                         Collectors.summingLong(Trip::getDurationHours)

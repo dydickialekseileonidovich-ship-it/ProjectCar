@@ -16,7 +16,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Интеграционные автотесты JUnit 5 для проверки бизнес-правил автопарка.
- * @Transactional откатывает изменения в БД после каждого теста, чтобы тесты были независимыми.
  */
 @SpringBootTest
 @Transactional
@@ -35,7 +34,6 @@ public class FleetServiceTest {
     private Vehicle truck;
     private Vehicle bus;
 
-    // Подготовка тестовых данных перед каждым тестом
     @BeforeEach
     void setUp() {
         driver = driverRepo.save(new Driver("Алексей Смирнов", Set.of(VehicleCategory.TRUCK)));
@@ -43,9 +41,6 @@ public class FleetServiceTest {
         bus = vehicleRepo.save(new Vehicle("M555MM", "Mercedes Tourismo", VehicleCategory.BUS));
     }
 
-    /**
-     * Тест 1: Проверка запрета на выезд, если у водителя нет нужной категории прав (TRUCK != BUS).
-     */
     @Test
     void testCategoryMismatchThrowsException() {
         assertThrows(IllegalStateException.class, () ->
@@ -53,40 +48,47 @@ public class FleetServiceTest {
         );
     }
 
-    /**
-     * Тест 2: Проверка запрета на повторный выезд автомобиля, который не прошел ТО после рейса.
-     */
     @Test
     void testUnservicedVehicleCannotStartNewTrip() {
         LocalDateTime start = LocalDateTime.of(2026, 11, 16, 8, 0);
         Trip trip = fleetService.startTrip(driver.getId(), truck.getId(), start);
         fleetService.finishTrip(trip.getId(), start.plusHours(5));
 
-        // Попытка выехать без обслуживания должна выбросить ошибку IllegalStateException
         assertThrows(IllegalStateException.class, () ->
                 fleetService.startTrip(driver.getId(), truck.getId(), start.plusHours(6))
         );
     }
 
-    /**
-     * Тест 3: Проверка расписания работы ТО (разрешено только в будни с 08:00 до 17:00).
-     */
     @Test
     void testMaintenanceOutsideWorkingHoursThrowsException() {
         LocalDateTime start = LocalDateTime.of(2026, 11, 16, 8, 0);
         Trip trip = fleetService.startTrip(driver.getId(), truck.getId(), start);
         fleetService.finishTrip(trip.getId(), start.plusHours(5));
 
-        // Попытка обслуживания в 19:00 (нерабочее время после 17:00) -> ожидаем ошибку
         LocalDateTime eveningTime = LocalDateTime.of(2026, 11, 16, 19, 0);
         assertThrows(IllegalStateException.class, () ->
                 fleetService.performMaintenance(truck.getId(), "Мойка", eveningTime)
         );
 
-        // Обслуживание в 14:00 в понедельник (рабочее время) -> проходит без ошибок
         LocalDateTime validTime = LocalDateTime.of(2026, 11, 16, 14, 0);
         assertDoesNotThrow(() ->
                 fleetService.performMaintenance(truck.getId(), "Мойка", validTime)
         );
+    }
+
+    /**
+     * Тест 4: Дозаправка автомобиля прямо во время активного рейса (IN_USE) разрешена в любое время
+     * и сохраняется в список работ без прерывания рейса.
+     */
+    @Test
+    void testRefuelDuringActiveTripAllowed() {
+        LocalDateTime start = LocalDateTime.of(2026, 11, 16, 20, 0);
+        fleetService.startTrip(driver.getId(), truck.getId(), start);
+
+        MaintenanceRecord record = assertDoesNotThrow(() ->
+                fleetService.performMaintenance(truck.getId(), "Дозаправка 100л на трассе", start.plusHours(2))
+        );
+        assertTrue(record.getDescription().contains("Дозаправка"));
+        assertEquals(VehicleStatus.IN_USE, truck.getStatus());
     }
 }
